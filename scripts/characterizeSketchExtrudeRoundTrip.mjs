@@ -58,6 +58,16 @@ function parseRepetitions(args) {
   return value;
 }
 
+function parsePackageRoot(args) {
+  const index = args.indexOf('--package-root');
+  if (index < 0) return repoRoot;
+  const value = args[index + 1];
+  if (!value || value.startsWith('--')) {
+    throw new Error('--package-root requires a package directory path.');
+  }
+  return resolve(value);
+}
+
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }
@@ -347,12 +357,13 @@ async function spawnWorker(workerPath, consumerRoot, mode, inputPath, outputPath
 const args = process.argv.slice(2);
 const repetitions = parseRepetitions(args);
 const fullOutput = args.includes('--full');
-const packageJson = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'));
+const packageRoot = parsePackageRoot(args);
+const packageJson = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'));
 const packageEntry = packageJson.exports['.'];
-const entryPath = resolve(repoRoot, packageEntry);
+const entryPath = resolve(packageRoot, packageEntry);
 const entryStats = await stat(entryPath);
 const entryDigest = sha256(await readFile(entryPath));
-const distDigest = await digestTree(join(repoRoot, 'dist-kernel'));
+const distDigest = await digestTree(join(packageRoot, 'dist-kernel'));
 const tempRoot = await mkdtemp(join(tmpdir(), 'brep-phase0-sketch-extrude-'));
 
 try {
@@ -361,7 +372,7 @@ try {
   const workerPath = join(consumerRoot, 'headlessSketchExtrudeRoundTripWorker.mjs');
   await mkdir(nodeModules, { recursive: true });
   await symlink(
-    repoRoot,
+    packageRoot,
     join(nodeModules, packageJson.name),
     process.platform === 'win32' ? 'junction' : 'dir',
   );

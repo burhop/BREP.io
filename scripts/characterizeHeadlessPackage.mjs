@@ -56,6 +56,16 @@ function parseRepetitions(args) {
   return value;
 }
 
+function parsePackageRoot(args) {
+  const index = args.indexOf('--package-root');
+  if (index < 0) return repoRoot;
+  const value = args[index + 1];
+  if (!value || value.startsWith('--')) {
+    throw new Error('--package-root requires a package directory path.');
+  }
+  return resolve(value);
+}
+
 function unique(values) {
   return [...new Set(values)];
 }
@@ -128,13 +138,15 @@ function sameJson(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-const repetitions = parseRepetitions(process.argv.slice(2));
-const packageJson = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'));
+const commandArgs = process.argv.slice(2);
+const repetitions = parseRepetitions(commandArgs);
+const packageRoot = parsePackageRoot(commandArgs);
+const packageJson = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'));
 const packageEntry = packageJson.exports['.'];
-const entryPath = resolve(repoRoot, packageEntry);
+const entryPath = resolve(packageRoot, packageEntry);
 const entryStats = await stat(entryPath);
 const entryDigest = sha256(await readFile(entryPath));
-const distDigest = await digestTree(join(repoRoot, 'dist-kernel'));
+const distDigest = await digestTree(join(packageRoot, 'dist-kernel'));
 
 const tempRoot = await mkdtemp(join(tmpdir(), 'brep-phase0-headless-'));
 try {
@@ -143,7 +155,7 @@ try {
   const packageLink = join(nodeModules, packageJson.name);
   const workerPath = join(consumerRoot, 'headlessPackageWorker.mjs');
   await mkdir(nodeModules, { recursive: true });
-  await symlink(repoRoot, packageLink, process.platform === 'win32' ? 'junction' : 'dir');
+  await symlink(packageRoot, packageLink, process.platform === 'win32' ? 'junction' : 'dir');
   await copyFile(workerSource, workerPath);
 
   const runs = [];

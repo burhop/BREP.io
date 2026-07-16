@@ -54,6 +54,16 @@ function optionInteger(args, name, fallback, minimum, maximum) {
   return value;
 }
 
+function optionPackageRoot(args) {
+  const index = args.indexOf('--package-root');
+  if (index < 0) return repoRoot;
+  const value = args[index + 1];
+  if (!value || value.startsWith('--')) {
+    throw new Error('--package-root requires a package directory path.');
+  }
+  return resolve(value);
+}
+
 function managerIdentity(historyA, historyB) {
   return canonicalize({
     sceneShared: historyA.scene === historyB.scene,
@@ -301,13 +311,14 @@ async function spawnWorker(workerPath, consumerRoot, start, count) {
 async function controllerMain(args) {
   const interleavings = optionInteger(args, '--interleavings', 1000, 2, 100_000);
   const workerCount = optionInteger(args, '--workers', 10, 1, 50);
+  const packageRoot = optionPackageRoot(args);
   if (workerCount > interleavings) throw new Error('--workers cannot exceed --interleavings.');
-  const packageJson = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'));
+  const packageJson = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'));
   const packageEntry = packageJson.exports['.'];
-  const entryPath = resolve(repoRoot, packageEntry);
+  const entryPath = resolve(packageRoot, packageEntry);
   const entryStats = await stat(entryPath);
   const entryDigest = sha256(await readFile(entryPath));
-  const distDigest = await digestTree(join(repoRoot, 'dist-kernel'));
+  const distDigest = await digestTree(join(packageRoot, 'dist-kernel'));
   const tempRoot = await mkdtemp(join(tmpdir(), 'brep-phase0-part-history-stress-'));
   try {
     const consumerRoot = join(tempRoot, 'consumer');
@@ -315,7 +326,7 @@ async function controllerMain(args) {
     const workerPath = join(consumerRoot, 'partHistoryStressWorker.mjs');
     await mkdir(nodeModules, { recursive: true });
     await symlink(
-      repoRoot,
+      packageRoot,
       join(nodeModules, packageJson.name),
       process.platform === 'win32' ? 'junction' : 'dir',
     );
