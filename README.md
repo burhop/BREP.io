@@ -120,6 +120,7 @@ Additional implemented features in the codebase include collapse edge, edge smoo
 Prerequisites:
 - Node.js 18+
 - `pnpm`
+- Python 3 (available as `python3`, `python`, or the Windows `py -3` launcher)
 - `git submodule update --init --recursive`
 
 Install and run locally:
@@ -133,6 +134,12 @@ pnpm dev
 Then open the Vite URL shown in your terminal.
 - Main app shell: `/index.html`
 - Direct CAD workspace: `/cad.html`
+
+The local Manifold build uses a working `cmake` from `PATH` when available. If
+needed, it installs CMake into the deterministic user tool cache at
+`~/.cache/brep-tools/cmake-venv`. The pinned Emscripten SDK is installed under
+`vendor/emsdk`; Windows activation uses `emsdk_env.bat` and does not require
+Bash.
 
 ## Build, Test, and Utility Commands
 
