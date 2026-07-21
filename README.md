@@ -136,10 +136,10 @@ Then open the Vite URL shown in your terminal.
 - Direct CAD workspace: `/cad.html`
 
 The local Manifold build uses a working `cmake` from `PATH` when available. If
-needed, it installs CMake into the deterministic user tool cache at
-`~/.cache/brep-tools/cmake-venv`. The pinned Emscripten SDK is installed under
-`vendor/emsdk`; Windows activation uses `emsdk_env.bat` and does not require
-Bash.
+needed, it installs CMake and the Ninja build tool into the deterministic user
+tool cache at `~/.cache/brep-tools/cmake-venv`. The pinned Emscripten SDK is
+installed under `vendor/emsdk`; Windows activation uses `emsdk_env.bat` and
+does not require Bash.
 
 ## Build, Test, and Utility Commands
 

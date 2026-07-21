@@ -38,6 +38,17 @@ export function getCmakeCandidates(cachedCmakeBinary: string): CommandCandidate[
   ];
 }
 
+export function getNinjaCandidates(cachedNinjaBinary: string): CommandCandidate[] {
+  return [
+    { command: "ninja", args: [], label: "ninja on PATH" },
+    {
+      command: cachedNinjaBinary,
+      args: [],
+      label: `cached ninja (${cachedNinjaBinary})`,
+    },
+  ];
+}
+
 export function selectFirstWorkingCommand(
   candidates: CommandCandidate[],
   probe: (candidate: CommandCandidate) => CommandProbeResult
@@ -93,7 +104,7 @@ export type EmscriptenCommandPlanOptions = {
 
 export function createEmscriptenCommandPlan(
   options: EmscriptenCommandPlanOptions
-): { command: string; args: string[] } {
+): { command: string; args: string[]; windowsVerbatimArguments?: boolean } {
   const {
     platform,
     rootDir,
@@ -115,7 +126,6 @@ export function createEmscriptenCommandPlan(
       `call ${quoteForWindowsCommand(emsdkLauncher)} activate ${quoteForWindowsCommand(emsdkVersion)} >nul`,
       `call ${quoteForWindowsCommand(emsdkEnvScript)} >nul`,
       `set "EM_CACHE=${emCacheDir.replaceAll('"', '""')}"`,
-      `if not exist ${quoteForWindowsCommand(emCacheDir)} mkdir ${quoteForWindowsCommand(emCacheDir)}`,
       `cd /d ${quoteForWindowsCommand(rootDir)}`,
       `${commandPrefix}${invocation}`,
     ].join(" && ");
@@ -123,6 +133,7 @@ export function createEmscriptenCommandPlan(
     return {
       command: options.commandInterpreter || "cmd.exe",
       args: ["/d", "/s", "/v:off", "/c", commandText],
+      windowsVerbatimArguments: true,
     };
   }
 

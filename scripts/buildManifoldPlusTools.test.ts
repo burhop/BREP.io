@@ -4,6 +4,7 @@ import {
   createEmscriptenCommandPlan,
   formatProbeAttempts,
   getCmakeCandidates,
+  getNinjaCandidates,
   getPythonCandidates,
   selectFirstWorkingCommand,
 } from "./buildManifoldPlusTools.js";
@@ -45,7 +46,7 @@ test("Windows Python discovery falls back to py -3", () => {
   assert.deepEqual(discovery.selected?.args, ["-3"]);
 });
 
-test("failed discovery diagnostics include every attempted CMake and Python option", () => {
+test("failed discovery diagnostics include every attempted build-tool and Python option", () => {
   const cmake = selectFirstWorkingCommand(
     getCmakeCandidates("C:\\tools\\cmake-venv\\Scripts\\cmake.exe"),
     () => ({ ok: false, detail: "not runnable" })
@@ -54,9 +55,25 @@ test("failed discovery diagnostics include every attempted CMake and Python opti
     ok: false,
     detail: "not runnable",
   }));
-  const diagnostics = formatProbeAttempts([...cmake.attempts, ...python.attempts]);
+  const ninja = selectFirstWorkingCommand(
+    getNinjaCandidates("C:\\tools\\cmake-venv\\Scripts\\ninja.exe"),
+    () => ({ ok: false, detail: "not runnable" })
+  );
+  const diagnostics = formatProbeAttempts([
+    ...cmake.attempts,
+    ...ninja.attempts,
+    ...python.attempts,
+  ]);
 
-  for (const option of ["cmake on PATH", "cached cmake", "python3", "python", "py -3"]) {
+  for (const option of [
+    "cmake on PATH",
+    "cached cmake",
+    "ninja on PATH",
+    "cached ninja",
+    "python3",
+    "python",
+    "py -3",
+  ]) {
     assert.ok(diagnostics.includes(option), `missing diagnostic for ${option}`);
   }
 });
@@ -77,6 +94,7 @@ test("Windows EMSDK plan activates the batch environment before invoking emcmake
   const commandText = plan.args.at(-1) || "";
 
   assert.equal(plan.command, "C:\\Windows\\System32\\cmd.exe");
+  assert.equal(plan.windowsVerbatimArguments, true);
   assert.ok(commandText.includes('set "EMSDK_QUIET=1"'));
   assert.ok(commandText.includes("emsdk.bat\" install 3.1.64"));
   assert.ok(commandText.includes("emsdk.bat\" activate 3.1.64"));

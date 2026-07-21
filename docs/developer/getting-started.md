@@ -17,7 +17,8 @@ before Vite starts. On Windows, the build scripts:
 1. use a runnable `cmake` from `PATH`, or a previously bootstrapped copy under
    `%USERPROFILE%\.cache\brep-tools\cmake-venv`;
 2. otherwise find Python 3 by trying `python3`, `python`, then `py -3`, rejecting
-   non-runnable command aliases, and install CMake into that same tool cache;
+   non-runnable command aliases, and install CMake and Ninja into that same
+   tool cache;
 3. install and activate the pinned SDK from `vendor/emsdk` (or the directory in
    `EMSDK`) and run compiler commands through `emsdk_env.bat`.
 
