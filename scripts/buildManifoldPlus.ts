@@ -6,6 +6,7 @@ import {
   createEmscriptenCommandPlan,
   formatProbeAttempts,
   getCmakeCandidates,
+  getNinjaCandidates,
   getPythonCandidates,
   selectFirstWorkingCommand,
 } from "./buildManifoldPlusTools.js";
@@ -30,6 +31,9 @@ const cmakeBinary = isWindows
 const cmakeVenvPython = isWindows
   ? path.join(cmakeBinDir, "python.exe")
   : path.join(cmakeBinDir, "python");
+const ninjaBinary = isWindows
+  ? path.join(cmakeBinDir, "ninja.exe")
+  : path.join(cmakeBinDir, "ninja");
 let selectedPython = null;
 
 const run = (command, args, options = {}) => {
@@ -157,7 +161,11 @@ const runWithEmscripten = (command, args) => {
     args,
     commandInterpreter: isWindows ? process.env.ComSpec || "cmd.exe" : undefined,
   });
-  run(plan.command, plan.args);
+  run(
+    plan.command,
+    plan.args,
+    plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
+  );
 };
 
 const runEmscriptenCommand = (command, args) => {
@@ -196,7 +204,14 @@ const ensureCmakeAvailable = () => {
       "venv",
       cmakeVenvDir,
     ]);
-    run(cmakeVenvPython, ["-m", "pip", "install", "--quiet", "cmake"]);
+    run(cmakeVenvPython, [
+      "-m",
+      "pip",
+      "install",
+      "--quiet",
+      "cmake",
+      ...(isWindows ? ["ninja"] : []),
+    ]);
     prependToPath(cmakeBinDir);
   } catch (error) {
     throw new Error(
@@ -235,6 +250,62 @@ const ensureCmakeAvailable = () => {
   console.log(`[build:manifoldPlus] Using ${venvProbe.detail}.`);
 };
 
+const ensureNinjaAvailable = () => {
+  if (!isWindows) return;
+
+  const discovery = selectFirstWorkingCommand(
+    getNinjaCandidates(ninjaBinary),
+    (candidate) => probeCandidate(candidate, ["--version"])
+  );
+  if (discovery.selected) {
+    if (discovery.selected.command === ninjaBinary) {
+      prependToPath(cmakeBinDir);
+    }
+    const selectedAttempt = discovery.attempts.at(-1);
+    console.log(
+      `[build:manifoldPlus] Using Ninja ${selectedAttempt?.detail || discovery.selected.label}.`
+    );
+    return;
+  }
+
+  if (!existsSync(cmakeVenvPython)) {
+    const python = discoverPython(discovery.attempts);
+    run(python.candidate.command, [
+      ...python.candidate.args,
+      "-m",
+      "venv",
+      cmakeVenvDir,
+    ]);
+  }
+  run(cmakeVenvPython, ["-m", "pip", "install", "--quiet", "ninja"]);
+  prependToPath(cmakeBinDir);
+
+  const installedProbe = probeCandidate(
+    { command: ninjaBinary, args: [], label: `bootstrapped ninja (${ninjaBinary})` },
+    ["--version"]
+  );
+  if (!installedProbe.ok) {
+    throw new Error(
+      [
+        "Bootstrapped the build-tool virtual environment, but Ninja is not runnable.",
+        "Attempted Ninja options:",
+        formatProbeAttempts([
+          ...discovery.attempts,
+          {
+            candidate: {
+              command: ninjaBinary,
+              args: [],
+              label: `bootstrapped ninja (${ninjaBinary})`,
+            },
+            ...installedProbe,
+          },
+        ]),
+      ].join("\n")
+    );
+  }
+  console.log(`[build:manifoldPlus] Using Ninja ${installedProbe.detail}.`);
+};
+
 const resolveBuiltArtifact = (buildDir, filename) => {
   const candidates = [
     path.join(buildDir, "vendor", "manifold3d", "bindings", "wasm", filename),
@@ -270,6 +341,7 @@ try {
   }
 
   ensureCmakeAvailable();
+  ensureNinjaAvailable();
   if (isWindows) {
     discoverPython();
   }
@@ -281,6 +353,7 @@ try {
 
   runEmscriptenCommand("emcmake", [
     "cmake",
+    ...(isWindows ? ["-G", "Ninja"] : []),
     "-S",
     sourceDir,
     "-B",
