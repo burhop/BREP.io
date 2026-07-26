@@ -33,7 +33,7 @@ below is from the exact npm artifact and the pinned Node 24 runtime.
 Run the exact-package experiment with:
 
 ```powershell
-& 'C:\Users\markb\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' `
+node `
   scripts\characterizeExportRoundTrip.mjs `
   --repetitions 5 `
   --package-root C:\tmp\brep-mcp-npm-consumer\node_modules\brep-io-kernel
