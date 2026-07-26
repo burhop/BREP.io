@@ -55,7 +55,7 @@ measurements agreed; that failed tuning run is not treated as a kernel failure.
 Run the exact-package experiment with:
 
 ```powershell
-& 'C:\Users\markb\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' `
+node `
   scripts\characterizeExternalGeometryOracle.mjs `
   --repetitions 5 `
   --package-root C:\tmp\brep-mcp-npm-consumer\node_modules\brep-io-kernel
