@@ -28,6 +28,10 @@ import {
   readBrowserStorageValue,
   writeBrowserStorageValue,
 } from '../utils/browserStorage.js';
+import {
+  invalidModelRecordError,
+  requireModelRecord,
+} from '../services/modelLoadErrors.js';
 import { replaceCurrentCadModelUrl } from '../utils/cadModelUrl.js';
 import { CADmaterials } from './CADmaterials.js';
 import { FloatingWindow } from './FloatingWindow.js';
@@ -1612,7 +1616,7 @@ export class FileManagerWidget {
   }
 
   async _loadModelRecord(name, rec, options: any = {}, source = 'local', seq = this._loadSeq, refreshReason = 'load-model') {
-    if (!rec) return alert('Model not found.');
+    rec = requireModelRecord(name, rec);
     await this.viewer.partHistory.reset();
     // Prefer new 3MF-based storage
     if (rec.data3mf && typeof rec.data3mf === 'string') {
@@ -1686,9 +1690,8 @@ export class FileManagerWidget {
       // Sync Expressions UI with imported code
       try { this.viewer?.expressionsManager?.refreshFromPartHistory?.(); } catch { }
     } catch (e) {
-      alert('Failed to load model (invalid data).');
       console.error(e);
-      return;
+      throw invalidModelRecordError(name);
     }
     if (seq !== this._loadSeq) return;
     this._applyLoadedModelState(name, options, rec, source);
