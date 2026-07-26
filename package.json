@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "liveTesting": "node --watch --watch-preserve-output --import tsx ./scripts/liveTesting.ts",
     "test": "tsx ./scripts/prepareManifoldRuntime.ts && tsx ./src/tests/tests.ts",
+    "test:build-tools": "node --import tsx --test ./scripts/buildManifoldPlusTools.test.ts",
     "generateLicenses": "tsx ./generateLicenses.ts && tsx ./scripts/generateLicenseBundle.ts",
     "prepareFonts": "tsx ./scripts/prepareFontAssets.ts",
     "capture": "tsx ./scripts/capture.ts",

@@ -2,16 +2,25 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } fr
 import path from "path";
 import { spawnSync } from "child_process";
 import os from "os";
+import {
+  createEmscriptenCommandPlan,
+  formatProbeAttempts,
+  getCmakeCandidates,
+  getNinjaCandidates,
+  getPythonCandidates,
+  selectFirstWorkingCommand,
+} from "./buildManifoldPlusTools.js";
 
 const rootDir = process.cwd();
 const sourceDir = path.join(rootDir, "manifold-plus");
 const buildDir = path.join(sourceDir, "build");
 const distDir = path.join(sourceDir, "dist");
+const isWindows = process.platform === "win32";
 const emsdkDir = process.env.EMSDK || path.join(rootDir, "vendor", "emsdk");
-const emsdkEnvScript = path.join(emsdkDir, "emsdk_env.sh");
+const emsdkLauncher = path.join(emsdkDir, isWindows ? "emsdk.bat" : "emsdk");
+const emsdkEnvScript = path.join(emsdkDir, isWindows ? "emsdk_env.bat" : "emsdk_env.sh");
 const emsdkVersion = "3.1.64";
 const emCacheDir = path.join(rootDir, ".emscripten_cache");
-const isWindows = process.platform === "win32";
 const cmakeVenvDir = path.join(os.homedir(), ".cache", "brep-tools", "cmake-venv");
 const cmakeBinDir = isWindows
   ? path.join(cmakeVenvDir, "Scripts")
@@ -19,11 +28,13 @@ const cmakeBinDir = isWindows
 const cmakeBinary = isWindows
   ? path.join(cmakeBinDir, "cmake.exe")
   : path.join(cmakeBinDir, "cmake");
-const pipBinary = isWindows
-  ? path.join(cmakeBinDir, "pip.exe")
-  : path.join(cmakeBinDir, "pip");
-
-const quoteForBash = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+const cmakeVenvPython = isWindows
+  ? path.join(cmakeBinDir, "python.exe")
+  : path.join(cmakeBinDir, "python");
+const ninjaBinary = isWindows
+  ? path.join(cmakeBinDir, "ninja.exe")
+  : path.join(cmakeBinDir, "ninja");
+let selectedPython = null;
 
 const run = (command, args, options = {}) => {
   const result = spawnSync(command, args, {
@@ -55,82 +66,244 @@ const prependToPath = (dir) => {
   process.env.PATH = [dir, ...segments].join(path.delimiter);
 };
 
+const summarizeProbeFailure = (result) => {
+  if (result.error?.code === "ENOENT") return "not found";
+  if (result.error) return result.error.message;
+  const output = `${result.stderr || ""}\n${result.stdout || ""}`.trim().replaceAll(/\s+/g, " ");
+  const status = result.status == null ? "no exit status" : `exit ${result.status}`;
+  return output ? `${status}: ${output.slice(0, 240)}` : status;
+};
+
+const probeCandidate = (candidate, args) => {
+  const result = spawnSync(candidate.command, [...candidate.args, ...args], {
+    cwd: rootDir,
+    encoding: "utf8",
+    shell: false,
+  });
+
+  if (result.status !== 0) {
+    return { ok: false, detail: summarizeProbeFailure(result) };
+  }
+
+  const output = String(result.stdout || "").trim();
+  return {
+    ok: true,
+    detail: output.split(/\r?\n/, 1)[0] || "runnable",
+    output,
+  };
+};
+
+const discoverPython = (priorAttempts = []) => {
+  if (selectedPython) return selectedPython;
+
+  const discovery = selectFirstWorkingCommand(
+    getPythonCandidates(process.platform),
+    (candidate) => {
+      const result = probeCandidate(candidate, [
+        "-c",
+        "import platform, sys; print(sys.executable); print(platform.python_version())",
+      ]);
+      if (!result.ok) return result;
+      const [executable, version] = result.output.split(/\r?\n/);
+      if (!executable || !version) {
+        return { ok: false, detail: "probe returned incomplete interpreter details" };
+      }
+      return {
+        ok: true,
+        detail: `Python ${version} at ${executable}`,
+        output: executable,
+      };
+    }
+  );
+
+  if (!discovery.selected) {
+    throw new Error(
+      [
+        "No usable Python 3 interpreter was found.",
+        "Attempted CMake/Python options:",
+        formatProbeAttempts([...priorAttempts, ...discovery.attempts]),
+      ].join("\n")
+    );
+  }
+
+  const selectedAttempt = discovery.attempts.at(-1);
+  selectedPython = {
+    candidate: discovery.selected,
+    executable: selectedAttempt?.output,
+    detail: selectedAttempt?.detail,
+    attempts: discovery.attempts,
+  };
+  if (selectedPython.executable) {
+    prependToPath(path.dirname(selectedPython.executable));
+  }
+  console.log(
+    `[build:manifoldPlus] Using Python '${selectedPython.executable}' via '${selectedPython.candidate.label}'.`
+  );
+  return selectedPython;
+};
+
 const ensureSubmodules = () => {
   const paths = ["vendor/manifold3d"];
   if (!process.env.EMSDK) paths.push("vendor/emsdk");
   run("git", ["submodule", "update", "--init", "--recursive", "--", ...paths]);
 };
 
-const runWithEmscripten = (commandText) => {
-  if (isWindows) {
-    throw new Error(
-      "Automatic EMSDK activation is only implemented for bash environments. Put emcmake/emcc on PATH and rerun."
-    );
-  }
-
-  const quotedCache = quoteForBash(emCacheDir);
-  run("bash", [
-    "-c",
-    [
-      "set -eo pipefail",
-      `cd ${quoteForBash(emsdkDir)}`,
-      `./emsdk install ${quoteForBash(emsdkVersion)} >/dev/null`,
-      `./emsdk activate ${quoteForBash(emsdkVersion)} >/dev/null`,
-      `source ${quoteForBash(emsdkEnvScript)} >/dev/null`,
-      `export EM_CACHE=${quotedCache}`,
-      `mkdir -p ${quotedCache}`,
-      `cd ${quoteForBash(rootDir)}`,
-      commandText,
-    ].join(" && "),
-  ]);
+const runWithEmscripten = (command, args) => {
+  const plan = createEmscriptenCommandPlan({
+    platform: process.platform,
+    rootDir,
+    emsdkDir,
+    emsdkLauncher,
+    emsdkEnvScript,
+    emsdkVersion,
+    emCacheDir,
+    command,
+    args,
+    commandInterpreter: isWindows ? process.env.ComSpec || "cmd.exe" : undefined,
+  });
+  run(
+    plan.command,
+    plan.args,
+    plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
+  );
 };
 
 const runEmscriptenCommand = (command, args) => {
-  if (!existsSync(path.join(emsdkDir, "emsdk"))) {
+  const missingEmsdkFiles = [emsdkLauncher, emsdkEnvScript].filter((file) => !existsSync(file));
+  if (missingEmsdkFiles.length > 0) {
     const location = process.env.EMSDK ? emsdkDir : path.relative(rootDir, emsdkDir);
     throw new Error(
-      `EMSDK checkout not found at '${location}'. Run 'git submodule update --init --recursive' and retry.`
+      `EMSDK checkout at '${location}' is missing: ${missingEmsdkFiles.join(", ")}. Run 'git submodule update --init --recursive' and retry.`
     );
   }
 
-  const commandText = [command, ...args].map(quoteForBash).join(" ");
-  runWithEmscripten(commandText);
+  runWithEmscripten(command, args);
 };
 
 const ensureCmakeAvailable = () => {
-  const probe = spawnSync("cmake", ["--version"], {
-    cwd: rootDir,
-    stdio: "ignore",
-    shell: false,
-  });
-
-  if (probe.status === 0) {
+  const cmakeDiscovery = selectFirstWorkingCommand(
+    getCmakeCandidates(cmakeBinary),
+    (candidate) => probeCandidate(candidate, ["--version"])
+  );
+  if (cmakeDiscovery.selected) {
+    if (cmakeDiscovery.selected.command === cmakeBinary) {
+      prependToPath(cmakeBinDir);
+    }
+    const selectedAttempt = cmakeDiscovery.attempts.at(-1);
+    console.log(
+      `[build:manifoldPlus] Using ${selectedAttempt?.detail || cmakeDiscovery.selected.label}.`
+    );
     return;
   }
 
-  const pipProbe = spawnSync("python3", ["--version"], {
-    cwd: rootDir,
-    stdio: "ignore",
-    shell: false,
-  });
-  if (pipProbe.status !== 0) {
+  const python = discoverPython(cmakeDiscovery.attempts);
+  try {
+    run(python.candidate.command, [
+      ...python.candidate.args,
+      "-m",
+      "venv",
+      cmakeVenvDir,
+    ]);
+    run(cmakeVenvPython, [
+      "-m",
+      "pip",
+      "install",
+      "--quiet",
+      "cmake",
+      ...(isWindows ? ["ninja"] : []),
+    ]);
+    prependToPath(cmakeBinDir);
+  } catch (error) {
     throw new Error(
-      "A runnable 'cmake' was not found, and python3 is unavailable to bootstrap one."
+      [
+        error?.message || error,
+        "Attempted CMake/Python options:",
+        formatProbeAttempts([...cmakeDiscovery.attempts, ...python.attempts]),
+      ].join("\n")
     );
   }
 
-  run("python3", ["-m", "venv", cmakeVenvDir]);
-  run(pipBinary, ["install", "--quiet", "cmake"]);
+  const venvProbe = probeCandidate(
+    { command: cmakeBinary, args: [], label: `bootstrapped cmake (${cmakeBinary})` },
+    ["--version"]
+  );
+  if (!venvProbe.ok) {
+    throw new Error(
+      [
+        "Bootstrapped the CMake virtual environment, but its cmake executable is not runnable.",
+        "Attempted CMake/Python options:",
+        formatProbeAttempts([
+          ...cmakeDiscovery.attempts,
+          ...python.attempts,
+          {
+            candidate: {
+              command: cmakeBinary,
+              args: [],
+              label: `bootstrapped cmake (${cmakeBinary})`,
+            },
+            ...venvProbe,
+          },
+        ]),
+      ].join("\n")
+    );
+  }
+  console.log(`[build:manifoldPlus] Using ${venvProbe.detail}.`);
+};
+
+const ensureNinjaAvailable = () => {
+  if (!isWindows) return;
+
+  const discovery = selectFirstWorkingCommand(
+    getNinjaCandidates(ninjaBinary),
+    (candidate) => probeCandidate(candidate, ["--version"])
+  );
+  if (discovery.selected) {
+    if (discovery.selected.command === ninjaBinary) {
+      prependToPath(cmakeBinDir);
+    }
+    const selectedAttempt = discovery.attempts.at(-1);
+    console.log(
+      `[build:manifoldPlus] Using Ninja ${selectedAttempt?.detail || discovery.selected.label}.`
+    );
+    return;
+  }
+
+  if (!existsSync(cmakeVenvPython)) {
+    const python = discoverPython(discovery.attempts);
+    run(python.candidate.command, [
+      ...python.candidate.args,
+      "-m",
+      "venv",
+      cmakeVenvDir,
+    ]);
+  }
+  run(cmakeVenvPython, ["-m", "pip", "install", "--quiet", "ninja"]);
   prependToPath(cmakeBinDir);
 
-  const venvProbe = spawnSync(cmakeBinary, ["--version"], {
-    cwd: rootDir,
-    stdio: "ignore",
-    shell: false,
-  });
-  if (venvProbe.status !== 0) {
-    throw new Error("Bootstrapped cmake virtualenv, but the cmake executable is still unavailable.");
+  const installedProbe = probeCandidate(
+    { command: ninjaBinary, args: [], label: `bootstrapped ninja (${ninjaBinary})` },
+    ["--version"]
+  );
+  if (!installedProbe.ok) {
+    throw new Error(
+      [
+        "Bootstrapped the build-tool virtual environment, but Ninja is not runnable.",
+        "Attempted Ninja options:",
+        formatProbeAttempts([
+          ...discovery.attempts,
+          {
+            candidate: {
+              command: ninjaBinary,
+              args: [],
+              label: `bootstrapped ninja (${ninjaBinary})`,
+            },
+            ...installedProbe,
+          },
+        ]),
+      ].join("\n")
+    );
   }
+  console.log(`[build:manifoldPlus] Using Ninja ${installedProbe.detail}.`);
 };
 
 const resolveBuiltArtifact = (buildDir, filename) => {
@@ -168,11 +341,19 @@ try {
   }
 
   ensureCmakeAvailable();
+  ensureNinjaAvailable();
+  if (isWindows) {
+    discoverPython();
+  }
   mkdirSync(buildDir, { recursive: true });
   mkdirSync(emCacheDir, { recursive: true });
+  console.log(
+    `[build:manifoldPlus] Using EMSDK '${emsdkDir}' with Emscripten ${emsdkVersion}.`
+  );
 
   runEmscriptenCommand("emcmake", [
     "cmake",
+    ...(isWindows ? ["-G", "Ninja"] : []),
     "-S",
     sourceDir,
     "-B",
